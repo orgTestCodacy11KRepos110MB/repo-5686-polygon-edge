@@ -77,6 +77,7 @@ type Validator struct {
 	Address types.Address
 	BlsKey  string
 	Balance *big.Int
+	Stake   *big.Int
 	NodeID  string
 }
 
@@ -84,12 +85,14 @@ type validatorRaw struct {
 	Address types.Address `json:"address"`
 	BlsKey  string        `json:"blsKey"`
 	Balance *string       `json:"balance"`
+	Stake   *string       `json:"stake"`
 	NodeID  string        `json:"nodeId"`
 }
 
 func (v *Validator) MarshalJSON() ([]byte, error) {
 	raw := &validatorRaw{Address: v.Address, BlsKey: v.BlsKey, NodeID: v.NodeID}
 	raw.Balance = types.EncodeBigInt(v.Balance)
+	raw.Stake = types.EncodeBigInt(v.Stake)
 
 	return json.Marshal(raw)
 }
@@ -106,8 +109,13 @@ func (v *Validator) UnmarshalJSON(data []byte) error {
 	v.Address = raw.Address
 	v.BlsKey = raw.BlsKey
 	v.NodeID = raw.NodeID
-	v.Balance, err = types.ParseUint256orHex(raw.Balance)
 
+	v.Balance, err = types.ParseUint256orHex(raw.Balance)
+	if err != nil {
+		return err
+	}
+
+	v.Stake, err = types.ParseUint256orHex(raw.Stake)
 	if err != nil {
 		return err
 	}
@@ -135,7 +143,7 @@ func (v *Validator) ToValidatorMetadata() (*ValidatorMetadata, error) {
 	metadata := &ValidatorMetadata{
 		Address:     v.Address,
 		BlsKey:      blsKey,
-		VotingPower: new(big.Int).Set(v.Balance),
+		VotingPower: new(big.Int).Set(v.Stake),
 	}
 
 	return metadata, nil

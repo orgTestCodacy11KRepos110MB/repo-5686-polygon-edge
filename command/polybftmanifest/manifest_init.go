@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path"
 	"strings"
@@ -18,6 +19,7 @@ import (
 const (
 	manifestPathFlag      = "path"
 	premineValidatorsFlag = "premine-validators"
+	stakeFlag             = "stake"
 	validatorsFlag        = "validators"
 	validatorsPathFlag    = "validators-path"
 	validatorsPrefixFlag  = "validators-prefix"
@@ -87,6 +89,13 @@ func setFlags(cmd *cobra.Command) {
 		"the amount which will be pre-mined to all the validators",
 	)
 
+	cmd.Flags().StringVar(
+		&params.stakeRaw,
+		stakeFlag,
+		"",
+		"the amount which will be staked by all the validators",
+	)
+
 	cmd.MarkFlagsMutuallyExclusive(validatorsFlag, validatorsPathFlag)
 	cmd.MarkFlagsMutuallyExclusive(validatorsFlag, validatorsPrefixFlag)
 }
@@ -117,26 +126,50 @@ type manifestInitParams struct {
 	validatorsPath       string
 	validatorsPrefixPath string
 	premineValidators    string
+	premineBalance       *big.Int
+	stakeRaw             string
+	stake                *big.Int
 	validators           []string
 }
 
 func (p *manifestInitParams) validateFlags() error {
-	if _, err := os.Stat(p.validatorsPath); errors.Is(err, os.ErrNotExist) {
+	var (
+		stake          *big.Int
+		premineBalance *big.Int
+		err            error
+	)
+
+	if _, err = os.Stat(p.validatorsPath); errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("provided validators path '%s' doesn't exist", p.validatorsPath)
 	}
 
-	if _, err := types.ParseUint256orHex(&p.premineValidators); err != nil {
+	if premineBalance, err = types.ParseUint256orHex(&p.premineValidators); err != nil {
 		return fmt.Errorf("invalid premine validators balance provided '%s': %w", p.premineValidators, err)
 	}
+
+	if p.stakeRaw != "" {
+		if stake, err = types.ParseUint256orHex(&p.stakeRaw); err != nil {
+			return fmt.Errorf("invalid stake amount provided '%s': %w", p.premineValidators, err)
+		}
+
+		if stake.Cmp(premineBalance) > 0 {
+			return fmt.Errorf("provided stake is greater than premine balance (stake=%s premine balance=%s)",
+				stake.String(), premineBalance.String())
+		}
+	}
+
+	p.premineBalance = premineBalance
+	p.stake = stake
 
 	return nil
 }
 
 // getValidatorAccounts gathers validator accounts info either from CLI or from provided local storage
 func (p *manifestInitParams) getValidatorAccounts() ([]*polybft.Validator, error) {
-	balance, err := types.ParseUint256orHex(&params.premineValidators)
-	if err != nil {
-		return nil, fmt.Errorf("provided invalid premine validators balance: %s", params.premineValidators)
+	stake := p.stake
+	// stake not provided => use validator balance as stake
+	if stake == nil {
+		stake = new(big.Int).Set(p.premineBalance)
 	}
 
 	if len(p.validators) > 0 {
@@ -166,7 +199,8 @@ func (p *manifestInitParams) getValidatorAccounts() ([]*polybft.Validator, error
 				NodeID:  parts[0],
 				Address: types.StringToAddress(parts[1]),
 				BlsKey:  parts[2],
-				Balance: balance,
+				Balance: p.premineBalance,
+				Stake:   stake,
 			}
 		}
 
@@ -184,7 +218,8 @@ func (p *manifestInitParams) getValidatorAccounts() ([]*polybft.Validator, error
 	}
 
 	for _, v := range validators {
-		v.Balance = balance
+		v.Balance = p.premineBalance
+		v.Stake = stake
 	}
 
 	return validators, nil

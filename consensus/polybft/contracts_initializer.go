@@ -57,7 +57,7 @@ func getInitChildValidatorSetInput(polyBFTConfig PolyBFTConfig) ([]byte, error) 
 
 		validatorPubkeys[i] = pubKeyBig
 		validatorAddresses[i] = validator.Address
-		validatorStakes[i] = new(big.Int).Set(validator.Balance)
+		validatorStakes[i] = new(big.Int).Set(validator.Stake)
 	}
 
 	registerMessage, err := bls.MarshalMessageToBigInt([]byte(contracts.PolyBFTRegisterMessage))
