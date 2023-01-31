@@ -23,9 +23,10 @@ var accountSetABIType = abi.MustNewType(`tuple(tuple(address _address, uint256[4
 
 // ValidatorMetadata represents a validator metadata (its public identity)
 type ValidatorMetadata struct {
-	Address     types.Address
-	BlsKey      *bls.PublicKey
-	VotingPower *big.Int
+	Address      types.Address
+	BlsKey       *bls.PublicKey
+	BlsSignature *bls.Signature // only used when KOSK mitigation around rogue attack is needed
+	VotingPower  *big.Int
 }
 
 // Equals checks ValidatorMetadata equality
@@ -43,18 +44,28 @@ func (v *ValidatorMetadata) EqualAddressAndBlsKey(b *ValidatorMetadata) bool {
 		return false
 	}
 
+	// TODO: initial set continas blsSignature, after that there are no signature. So we do not need this check?
+	//&& reflect.DeepEqual(v.BlsSignature, b.BlsSignature)
 	return v.Address == b.Address && reflect.DeepEqual(v.BlsKey, b.BlsKey)
 }
 
 // Copy returns a deep copy of ValidatorMetadata
 func (v *ValidatorMetadata) Copy() *ValidatorMetadata {
+	var blsSignature *bls.Signature
+
 	copiedBlsKey := v.BlsKey.Marshal()
 	blsKey, _ := bls.UnmarshalPublicKey(copiedBlsKey)
 
+	if v.BlsSignature != nil {
+		signatureBytes, _ := v.BlsSignature.Marshal()
+		blsSignature, _ = bls.UnmarshalSignature(signatureBytes)
+	}
+
 	return &ValidatorMetadata{
-		Address:     types.BytesToAddress(v.Address[:]),
-		BlsKey:      blsKey,
-		VotingPower: new(big.Int).Set(v.VotingPower),
+		Address:      types.BytesToAddress(v.Address[:]),
+		BlsKey:       blsKey,
+		BlsSignature: blsSignature,
+		VotingPower:  new(big.Int).Set(v.VotingPower),
 	}
 }
 
@@ -67,6 +78,11 @@ func (v *ValidatorMetadata) MarshalRLPWith(ar *fastrlp.Arena) *fastrlp.Value {
 	vv.Set(ar.NewCopyBytes(v.BlsKey.Marshal()))
 	// VotingPower
 	vv.Set(ar.NewBigInt(v.VotingPower))
+	// blsSignature if needed
+	if v.BlsSignature != nil {
+		bytes, _ := v.BlsSignature.Marshal()
+		vv.Set(ar.NewCopyBytes(bytes))
+	}
 
 	return vv
 }
@@ -78,8 +94,8 @@ func (v *ValidatorMetadata) UnmarshalRLPWith(val *fastrlp.Value) error {
 		return err
 	}
 
-	if num := len(elems); num != 3 {
-		return fmt.Errorf("incorrect elements count to decode validator account, expected 3 but found %d", num)
+	if num := len(elems); num != 3 && num != 4 {
+		return fmt.Errorf("incorrect elements count to decode validator account, expected 3 or 4 but found %d", num)
 	}
 
 	// Address
@@ -113,13 +129,41 @@ func (v *ValidatorMetadata) UnmarshalRLPWith(val *fastrlp.Value) error {
 
 	v.VotingPower = new(big.Int).Set(votingPower)
 
+	// blsSignature if needed
+	if len(elems) == 4 {
+		blsSignBytes, err := elems[3].GetBytes(nil)
+		if err != nil {
+			return fmt.Errorf("expected 'BlsSignature' encoded as bytes. Error: %w", err)
+		}
+
+		v.BlsSignature, err = bls.UnmarshalSignature(blsSignBytes)
+		if err != nil {
+			return fmt.Errorf("failed to unmarshal BLS signature. Error: %w", err)
+		}
+	}
+
 	return nil
 }
 
 // fmt.Stringer implementation
 func (v *ValidatorMetadata) String() string {
-	return fmt.Sprintf("Address=%v; Voting Power=%d; BLS Key=%v;",
-		v.Address.String(), v.VotingPower, hex.EncodeToString(v.BlsKey.Marshal()))
+	return fmt.Sprintf("Address=%v; Voting Power=%d; BLS Key=%v; Has Sign=%v",
+		v.Address.String(), v.VotingPower, hex.EncodeToString(v.BlsKey.Marshal()), v.BlsSignature != nil)
+}
+
+// ToAPIInitializeBinding converts AccountSet to slice of contract api stubs to be encoded
+func (v ValidatorMetadata) ToAPIInitializeBinding() (*contractsapi.ValidatorInit, error) {
+	signBigInts, err := v.BlsSignature.ToBigInt()
+	if err != nil {
+		return nil, err
+	}
+
+	return &contractsapi.ValidatorInit{
+		Addr:      v.Address,
+		Pubkey:    v.BlsKey.ToBigInt(),
+		Signature: signBigInts,
+		Stake:     new(big.Int).Set(v.VotingPower),
+	}, nil
 }
 
 // AccountSet is a type alias for slice of ValidatorMetadata instances

@@ -89,7 +89,7 @@ func (s *SystemStateImpl) GetValidatorSet() (AccountSet, error) {
 			return nil, fmt.Errorf("failed to unmarshal BLS public key: %w", err)
 		}
 
-		totalStake, ok := output["totalStake"].(*big.Int)
+		totalStake, ok := output["stake"].(*big.Int) // ex "totalStake" ?
 		if !ok {
 			return nil, fmt.Errorf("failed to decode total stake")
 		}

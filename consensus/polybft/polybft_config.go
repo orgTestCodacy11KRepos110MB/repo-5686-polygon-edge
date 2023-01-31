@@ -12,6 +12,7 @@ import (
 	"github.com/0xPolygon/polygon-edge/chain"
 	bls "github.com/0xPolygon/polygon-edge/consensus/polybft/signer"
 	"github.com/0xPolygon/polygon-edge/types"
+	"github.com/umbracle/ethgo/abi"
 )
 
 // PolyBFTConfig is the configuration file for the Polybft consensus protocol.
@@ -74,21 +75,23 @@ func (p *PolyBFTConfig) IsBridgeEnabled() bool {
 
 // Validator represents public information about validator accounts which are the part of genesis
 type Validator struct {
-	Address types.Address
-	BlsKey  string
-	Balance *big.Int
-	NodeID  string
+	Address      types.Address
+	BlsKey       string
+	BlsSignature string
+	Balance      *big.Int
+	NodeID       string
 }
 
 type validatorRaw struct {
-	Address types.Address `json:"address"`
-	BlsKey  string        `json:"blsKey"`
-	Balance *string       `json:"balance"`
-	NodeID  string        `json:"nodeId"`
+	Address      types.Address `json:"address"`
+	BlsKey       string        `json:"blsKey"`
+	BlsSignature string        `json:"blsSignature"`
+	Balance      *string       `json:"balance"`
+	NodeID       string        `json:"nodeId"`
 }
 
 func (v *Validator) MarshalJSON() ([]byte, error) {
-	raw := &validatorRaw{Address: v.Address, BlsKey: v.BlsKey, NodeID: v.NodeID}
+	raw := &validatorRaw{Address: v.Address, BlsKey: v.BlsKey, NodeID: v.NodeID, BlsSignature: v.BlsSignature}
 	raw.Balance = types.EncodeBigInt(v.Balance)
 
 	return json.Marshal(raw)
@@ -105,6 +108,7 @@ func (v *Validator) UnmarshalJSON(data []byte) error {
 
 	v.Address = raw.Address
 	v.BlsKey = raw.BlsKey
+	v.BlsSignature = raw.BlsSignature
 	v.NodeID = raw.NodeID
 	v.Balance, err = types.ParseUint256orHex(raw.Balance)
 
@@ -125,6 +129,16 @@ func (v *Validator) UnmarshalBLSPublicKey() (*bls.PublicKey, error) {
 	return bls.UnmarshalPublicKey(decoded)
 }
 
+// UnmarshalBLSSignature unmarshals the hex encoded BLS signature
+func (v *Validator) UnmarshalBLSSignature() (*bls.Signature, error) {
+	decoded, err := hex.DecodeString(v.BlsSignature)
+	if err != nil {
+		return nil, err
+	}
+
+	return bls.UnmarshalSignature(decoded)
+}
+
 // ToValidatorMetadata creates ValidatorMetadata instance
 func (v *Validator) ToValidatorMetadata() (*ValidatorMetadata, error) {
 	blsKey, err := v.UnmarshalBLSPublicKey()
@@ -132,13 +146,44 @@ func (v *Validator) ToValidatorMetadata() (*ValidatorMetadata, error) {
 		return nil, err
 	}
 
+	blsSignature, err := v.UnmarshalBLSSignature()
+	if err != nil {
+		return nil, err
+	}
+
 	metadata := &ValidatorMetadata{
-		Address:     v.Address,
-		BlsKey:      blsKey,
-		VotingPower: new(big.Int).Set(v.Balance),
+		Address:      v.Address,
+		BlsKey:       blsKey,
+		BlsSignature: blsSignature,
+		VotingPower:  new(big.Int).Set(v.Balance),
 	}
 
 	return metadata, nil
+}
+
+// MakeSignature creates signature for KOSK prevention (code similar to code on smart contracts)
+func (v *Validator) MakeSignature(privateKey *bls.PrivateKey, blockID uint64) error {
+	message, err := abi.Encode(
+		[]interface{}{v.Address, new(big.Int).SetUint64(blockID)},
+		abi.MustNewType("tuple(address, uint256)"))
+	if err != nil {
+		return err
+	}
+
+	// abi.Encode adds 12 zero bytes before actual address bytes
+	signature, err := privateKey.Sign(message[12:])
+	if err != nil {
+		return err
+	}
+
+	bytes, err := signature.Marshal()
+	if err != nil {
+		return err
+	}
+
+	v.BlsSignature = hex.EncodeToString(bytes)
+
+	return nil
 }
 
 // RootchainConfig contains information about rootchain contract addresses
@@ -165,6 +210,7 @@ func (r *RootchainConfig) ToBridgeConfig() *BridgeConfig {
 type Manifest struct {
 	GenesisValidators []*Validator     `json:"validators"`
 	RootchainConfig   *RootchainConfig `json:"rootchain"`
+	ChainID           uint64           `json:"chainID"`
 }
 
 // LoadManifest deserializes Manifest instance

@@ -126,7 +126,7 @@ func GetValidatorKeyFiles(rootDir, filePrefix string) ([]string, error) {
 }
 
 // ReadValidatorsByPrefix reads validators secrets on a given root directory and with given folder prefix
-func ReadValidatorsByPrefix(dir, prefix string) ([]*polybft.Validator, error) {
+func ReadValidatorsByPrefix(dir, prefix string, blockID uint64) ([]*polybft.Validator, error) {
 	validatorKeyFiles, err := GetValidatorKeyFiles(dir, prefix)
 	if err != nil {
 		return nil, err
@@ -142,12 +142,15 @@ func ReadValidatorsByPrefix(dir, prefix string) ([]*polybft.Validator, error) {
 			return nil, err
 		}
 
-		validator := &polybft.Validator{
+		validators[i] = &polybft.Validator{
 			Address: types.Address(account.Ecdsa.Address()),
 			BlsKey:  hex.EncodeToString(account.Bls.PublicKey().Marshal()),
 			NodeID:  nodeID,
 		}
-		validators[i] = validator
+
+		if err := validators[i].MakeSignature(account.Bls, blockID); err != nil {
+			return nil, err
+		}
 	}
 
 	return validators, nil
